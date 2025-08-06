@@ -8,9 +8,45 @@ from event_fetcher import EventFetcher
 
 app = Flask(__name__)
 
+def get_area_id_from_name(area_name):
+    """
+    Find area ID by searching through common area codes
+    This is a simple approach - we test known area codes to find a match
+    """
+    try:
+        # Clean the area name for comparison
+        clean_name = area_name.lower().strip().replace('-', '').replace('_', '').replace(' ', '')
+        
+        # Test area codes 1-20 first (most common cities)
+        for area_id in range(1, 21):
+            area_info = get_area_info(area_id)
+            if area_info and area_info.get('name'):
+                # Compare cleaned names
+                api_name = area_info['name'].lower().replace('-', '').replace('_', '').replace(' ', '')
+                url_name = area_info.get('url_name', '').lower().replace('-', '').replace('_', '').replace(' ', '')
+                
+                if clean_name in api_name or clean_name in url_name or api_name in clean_name:
+                    return area_id
+        
+        # Test some known higher numbers
+        for area_id in [433, 674]:  # NSW, Byron Bay
+            area_info = get_area_info(area_id)
+            if area_info and area_info.get('name'):
+                api_name = area_info['name'].lower().replace('-', '').replace('_', '').replace(' ', '')
+                url_name = area_info.get('url_name', '').lower().replace('-', '').replace('_', '').replace(' ', '')
+                
+                if clean_name in api_name or clean_name in url_name or api_name in clean_name:
+                    return area_id
+                    
+        return None
+        
+    except Exception as e:
+        print(f"Error finding area ID for {area_name}: {e}")
+        return None
+
 def get_area_info(area_id):
     """
-    Get area name and country info using RA's GET_RELATED_AREA query
+    Get area name and country info using RA's GraphQL API
     """
     try:
         url = 'https://ra.co/graphql'
@@ -21,25 +57,19 @@ def get_area_info(area_id):
         }
         
         payload = {
-            "operationName": "GET_RELATED_AREA",
+            "operationName": "GET_AREA_INFO",
             "variables": {
-                "areaId": str(area_id),
-                "count": 1,
-                "dateFrom": "2025-08-06",
-                "dateTo": "2025-08-10"
+                "areaId": str(area_id)
             },
-            "query": """query GET_RELATED_AREA($areaId: ID, $dateFrom: DateTime, $dateTo: DateTime, $count: Int!) {
+            "query": """query GET_AREA_INFO($areaId: ID!) {
                 area(id: $areaId) {
                     id
                     name
                     urlName
                     country {
-                        id
                         name
                         urlCode
-                        __typename
                     }
-                    __typename
                 }
             }"""
         }
@@ -82,7 +112,7 @@ def get_events():
     """
     Fetch events from Resident Advisor
     Query parameters:
-    - area: Area code (required)
+    - area: Area code (required) OR area_name: Area name like 'sydney', 'melbourne'
     - start_date: Start date YYYY-MM-DD (required) 
     - end_date: End date YYYY-MM-DD (required)
     - format: 'csv' or 'json' (optional, default: json)
@@ -90,17 +120,30 @@ def get_events():
     try:
         # Get query parameters
         area = request.args.get('area')
+        area_name = request.args.get('area_name')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         output_format = request.args.get('format', 'json').lower()
         
-        # Validate required parameters
-        if not all([area, start_date, end_date]):
+        # Must have either area or area_name
+        if not (area or area_name) or not all([start_date, end_date]):
             return jsonify({
                 "error": "Missing required parameters",
-                "required": ["area", "start_date", "end_date"],
-                "example": "/events?area=1&start_date=2025-08-10&end_date=2025-08-17"
+                "required": ["area OR area_name", "start_date", "end_date"],
+                "examples": [
+                    "/events?area=1&start_date=2025-08-10&end_date=2025-08-17",
+                    "/events?area_name=sydney&start_date=2025-08-10&end_date=2025-08-17"
+                ]
             }), 400
+        
+        # If area_name provided, get the area ID
+        if area_name and not area:
+            area = get_area_id_from_name(area_name)
+            if area is None:
+                return jsonify({
+                    "error": f"Could not find area ID for '{area_name}'",
+                    "suggestion": "Try area names like 'sydney', 'melbourne', 'adelaide', 'perth'"
+                }), 404
             
         # Validate area is numeric
         try:
@@ -125,7 +168,7 @@ def get_events():
         event_fetcher = EventFetcher(area, listing_date_gte, listing_date_lte)
         events = event_fetcher.fetch_all_events()
         
-        # Get area information
+        # Get area information from GraphQL
         area_info = get_area_info(area)
         
         if output_format == 'csv':
@@ -184,27 +227,25 @@ def get_events():
 @app.route('/areas', methods=['GET'])
 def list_areas():
     """
-    Return known RA area codes for reference
+    Return discovered RA area codes with names from GraphQL API
     """
-    known_areas = {
-        "1": "Sydney (+ Brisbane)",
-        "2": "Melbourne",
-        "3": "Perth", 
-        "4": "Canberra",
-        "5": "Adelaide",
-        "6": "Hobart",
-        "8": "New York, US",
-        "433": "New South Wales",
-        "674": "Byron Bay"
-    }
+    discovered_areas = {}
+    
+    # Test known area codes and get their names dynamically
+    known_codes = [1, 2, 3, 4, 5, 6, 8, 433, 674]
+    
+    for area_id in known_codes:
+        area_info = get_area_info(area_id)
+        if area_info:
+            discovered_areas[str(area_id)] = f"{area_info['name']}, {area_info['country']['code']}"
+    
     return jsonify({
-        "message": "Known Resident Advisor area codes",
-        "areas": known_areas,
-        "note": "Use 'area' parameter with numeric codes, or 'area_name' parameter with city names like 'sydney', 'melbourne'",
-        "examples": [
-            "/events?area=1&start_date=2025-08-10&end_date=2025-08-17",
-            "/events?area_name=berlin&start_date=2025-08-10&end_date=2025-08-17"
-        ]
+        "message": "Resident Advisor area codes",
+        "areas": discovered_areas,
+        "usage": {
+            "by_code": "/events?area=1&start_date=2025-08-10&end_date=2025-08-17",
+            "by_name": "/events?area_name=sydney&start_date=2025-08-10&end_date=2025-08-17"
+        }
     })
 
 if __name__ == '__main__':
