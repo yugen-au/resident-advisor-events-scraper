@@ -2,10 +2,50 @@ from flask import Flask, request, jsonify, send_file
 import os
 import tempfile
 import json
+import re
+import requests
 from datetime import datetime
 from event_fetcher import EventFetcher
 
 app = Flask(__name__)
+
+def get_area_id_from_name(area_name):
+    """
+    Get area ID by scraping RA's events page for the given area name
+    """
+    try:
+        # Clean the area name (lowercase, replace spaces with hyphens)
+        clean_name = area_name.lower().replace(' ', '-').replace('_', '-')
+        
+        # Visit RA's events page for this area
+        url = f"https://ra.co/events/{clean_name}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/106.0'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            # Look for GraphQL requests or area ID in the page
+            # This is a simplified approach - we might need to make it more robust
+            content = response.text
+            
+            # Try to find area ID in script tags or data attributes
+            # Pattern might vary - this is a starting point
+            area_id_match = re.search(r'"areaId["\s]*:\s*(\d+)', content)
+            if area_id_match:
+                return int(area_id_match.group(1))
+                
+            # Alternative patterns to look for
+            area_match = re.search(r'"area["\s]*:\s*(\d+)', content)
+            if area_match:
+                return int(area_match.group(1))
+                
+        return None
+        
+    except Exception as e:
+        print(f"Error getting area ID for {area_name}: {e}")
+        return None
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -23,7 +63,7 @@ def get_events():
     """
     Fetch events from Resident Advisor
     Query parameters:
-    - area: Area code (required)
+    - area: Area code (required) OR area_name: Area name like 'sydney', 'melbourne'
     - start_date: Start date YYYY-MM-DD (required) 
     - end_date: End date YYYY-MM-DD (required)
     - format: 'csv' or 'json' (optional, default: json)
@@ -31,22 +71,35 @@ def get_events():
     try:
         # Get query parameters
         area = request.args.get('area')
+        area_name = request.args.get('area_name')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         output_format = request.args.get('format', 'json').lower()
         
-        # Validate required parameters
-        if not all([area, start_date, end_date]):
+        # Must have either area or area_name
+        if not (area or area_name) or not all([start_date, end_date]):
             return jsonify({
                 "error": "Missing required parameters",
-                "required": ["area", "start_date", "end_date"],
-                "example": "/events?area=34&start_date=2025-08-10&end_date=2025-08-17"
+                "required": ["area OR area_name", "start_date", "end_date"],
+                "examples": [
+                    "/events?area=1&start_date=2025-08-10&end_date=2025-08-17",
+                    "/events?area_name=sydney&start_date=2025-08-10&end_date=2025-08-17"
+                ]
             }), 400
+        
+        # If area_name provided, get the area ID
+        if area_name and not area:
+            area = get_area_id_from_name(area_name)
+            if area is None:
+                return jsonify({
+                    "error": f"Could not find area ID for '{area_name}'",
+                    "suggestion": "Try area names like 'sydney', 'melbourne', 'berlin', 'new-york'"
+                }), 404
             
         # Validate area is numeric
         try:
             area = int(area)
-        except ValueError:
+        except (ValueError, TypeError):
             return jsonify({"error": "Area must be a number"}), 400
             
         # Validate date format
@@ -122,28 +175,27 @@ def get_events():
 @app.route('/areas', methods=['GET'])
 def list_areas():
     """
-    Return common RA area codes for reference
+    Return known RA area codes for reference
     """
-    common_areas = {
-        "1": "London, UK",
-        "3": "New York, US", 
-        "5": "Berlin, DE",
-        "13": "Amsterdam, NL",
-        "17": "Barcelona, ES",
-        "34": "Sydney, AU",
-        "44": "Melbourne, AU",
-        "18": "Paris, FR",
-        "40": "Los Angeles, US",
-        "47": "Tokyo, JP",
-        "15": "Ibiza, ES",
-        "19": "Chicago, US",
-        "39": "Miami, US",
-        "22": "Detroit, US"
+    known_areas = {
+        "1": "Sydney (+ Brisbane)",
+        "2": "Melbourne",
+        "3": "Perth", 
+        "4": "Canberra",
+        "5": "Adelaide",
+        "6": "Hobart",
+        "8": "New York, US",
+        "433": "New South Wales",
+        "674": "Byron Bay"
     }
     return jsonify({
-        "message": "Common Resident Advisor area codes",
-        "areas": common_areas,
-        "note": "Use the numeric keys as the 'area' parameter"
+        "message": "Known Resident Advisor area codes",
+        "areas": known_areas,
+        "note": "Use 'area' parameter with numeric codes, or 'area_name' parameter with city names like 'sydney', 'melbourne'",
+        "examples": [
+            "/events?area=1&start_date=2025-08-10&end_date=2025-08-17",
+            "/events?area_name=berlin&start_date=2025-08-10&end_date=2025-08-17"
+        ]
     })
 
 if __name__ == '__main__':
