@@ -177,18 +177,38 @@ def list_areas():
 
 @app.route('/search', methods=['GET'])
 def search_ra():
-    """Search RA database"""
+    """Enhanced search RA database with type filtering"""
     q = request.args.get('q')
+    search_type = request.args.get('type', '').upper()
+    
     if not q: 
-        return jsonify({"error": "Missing q parameter", "usage": "/search?q=charlotte+de+witte"}), 400
+        return jsonify({
+            "error": "Missing q parameter", 
+            "usage": {
+                "global": "/search?q=hard+techno",
+                "filtered": "/search?q=minimal+techno&type=artist"
+            }
+        }), 400
+    
+    # Map type parameter to indices
+    if search_type == 'ARTIST':
+        indices = ["ARTIST"]
+    elif search_type == 'LABEL':
+        indices = ["LABEL"]
+    elif search_type == 'CLUB':
+        indices = ["CLUB"]
+    elif search_type == 'EVENT':
+        indices = ["EVENT"]
+    else:
+        indices = ["ARTIST", "LABEL", "CLUB", "EVENT"]
     
     try:
         payload = {
             "operationName": "GET_GLOBAL_SEARCH_RESULTS",
-            "variables": {"searchTerm": q, "indices": ["ARTIST", "LABEL"]},
+            "variables": {"searchTerm": q, "indices": indices},
             "query": """query GET_GLOBAL_SEARCH_RESULTS($searchTerm: String!, $indices: [IndexType!]) {
-                search(searchTerm: $searchTerm limit: 10 indices: $indices includeNonLive: false) {
-                    searchType id value contentUrl imageUrl countryName
+                search(searchTerm: $searchTerm limit: 16 indices: $indices includeNonLive: false) {
+                    searchType id value contentUrl imageUrl countryName score
                 }
             }"""
         }
@@ -202,26 +222,33 @@ def search_ra():
             data = response.json()
             results = data.get('data', {}).get('search', [])
             
-            artists = []
-            labels = []
+            # Group results by type
+            grouped_results = {"artists": [], "labels": [], "clubs": [], "events": []}
+            
             for r in results:
                 item = {
                     "id": r['id'],
                     "name": r['value'], 
                     "url": r['contentUrl'],
                     "country": r.get('countryName'),
-                    "image": r.get('imageUrl')
+                    "image": r.get('imageUrl'),
+                    "score": r.get('score')
                 }
+                
                 if r['searchType'] == 'ARTIST':
                     item['slug'] = r['contentUrl'].split('/')[-1] if r['contentUrl'] else None
-                    artists.append(item)
+                    grouped_results["artists"].append(item)
                 elif r['searchType'] == 'LABEL':
-                    labels.append(item)
+                    grouped_results["labels"].append(item)
+                elif r['searchType'] == 'CLUB':
+                    grouped_results["clubs"].append(item)
+                elif r['searchType'] in ['EVENT', 'UPCOMINGEVENT']:
+                    grouped_results["events"].append(item)
             
             return jsonify({
                 "search_term": q,
-                "artists": artists,
-                "labels": labels,
+                "filter_type": search_type.lower() if search_type else "all",
+                "results": grouped_results,
                 "total": len(results)
             })
         
@@ -587,7 +614,7 @@ def search_labels():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/label/<label_id>', methods=['GET'])
-def get_label_info(label_id):
+def get_label_profile(label_id):
     """Get comprehensive label information"""
     try:
         payload = {
