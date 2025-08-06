@@ -1122,47 +1122,67 @@ def get_trending_reviews():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============ ESSENTIAL ENDPOINTS ============
-
 @app.route('/search', methods=['GET'])
-def search():
-    q = request.args.get('q', '')
+def simple_search():
+    q = request.args.get('q')
     if not q: return jsonify({"error": "Missing q parameter"}), 400
     
-    results = search_global(q, ["ARTIST", "LABEL"])
-    return jsonify({"results": [{"type": r['searchType'], "name": r['value'], "url": r['contentUrl'], "id": r['id']} for r in results]})
+    try:
+        payload = {
+            "operationName": "GET_GLOBAL_SEARCH_RESULTS",
+            "variables": {"searchTerm": q, "indices": ["ARTIST", "LABEL"]},
+            "query": """query GET_GLOBAL_SEARCH_RESULTS($searchTerm: String!, $indices: [IndexType!]) {
+                search(searchTerm: $searchTerm limit: 10 indices: $indices includeNonLive: false) {
+                    searchType id value contentUrl
+                }
+            }"""
+        }
+        
+        response = requests.post('https://ra.co/graphql', headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/106.0'
+        }, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('data', {}).get('search', [])
+            return jsonify({"results": [{"type": r['searchType'], "name": r['value'], "url": r['contentUrl']} for r in results]})
+        return jsonify({"error": "Search failed"}), 500
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/artist/<slug>', methods=['GET'])
-def artist_profile(slug):
-    artist = get_artist_by_slug(slug)
-    if not artist: return jsonify({"error": "Artist not found"}), 404
-    
-    return jsonify({
-        "name": artist.get('name'),
-        "bio": artist.get('biography', {}).get('blurb'),
-        "full_bio": artist.get('biography', {}).get('content'),
-        "country": artist.get('country', {}).get('name'),
-        "social": {"soundcloud": artist.get('soundcloud'), "instagram": artist.get('instagram')}
-    })
-
-@app.route('/artist/<slug>/related', methods=['GET'])
-def artist_related(slug):
-    artist = get_artist_by_slug(slug)
-    if not artist: return jsonify({"error": "Artist not found"}), 404
-    
-    related = get_related_artists(artist['id'])
-    return jsonify({"related": [{"name": a['name'], "slug": a['contentUrl'].split('/')[-1]} for a in related]})
-
-@app.route('/label/<label_id>', methods=['GET'])
-def label_profile(label_id):
-    label = get_label_info(label_id)
-    if not label: return jsonify({"error": "Label not found"}), 404
-    
-    return jsonify({
-        "name": label.get('name'),
-        "description": label.get('blurb'),
-        "artists": [{"name": a['name'], "slug": a['contentUrl'].split('/')[-1]} for a in label.get('artists', [])[:20]]
-    })
+def simple_artist(slug):
+    try:
+        payload = {
+            "operationName": "GET_ARTIST_BY_SLUG",
+            "variables": {"slug": slug},
+            "query": """query GET_ARTIST_BY_SLUG($slug: String!) {
+                artist(slug: $slug) {
+                    name biography { blurb content } country { name }
+                }
+            }"""
+        }
+        
+        response = requests.post('https://ra.co/graphql', headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/106.0'
+        }, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            artist = data.get('data', {}).get('artist')
+            if artist:
+                return jsonify({
+                    "name": artist.get('name'),
+                    "bio": artist.get('biography', {}).get('blurb'),
+                    "country": artist.get('country', {}).get('name')
+                })
+        return jsonify({"error": "Artist not found"}), 404
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
