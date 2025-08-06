@@ -764,8 +764,8 @@ def get_popular_reviews():
     """Get popular music reviews"""
     try:
         days = int(request.args.get('days', 7))
-        from datetime import datetime, timedelta
         
+        from datetime import timedelta
         date_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         date_to = datetime.now().strftime("%Y-%m-%d")
         
