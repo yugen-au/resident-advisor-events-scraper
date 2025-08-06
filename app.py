@@ -2,10 +2,69 @@ from flask import Flask, request, jsonify, send_file
 import os
 import tempfile
 import json
+import requests
 from datetime import datetime
 from event_fetcher import EventFetcher
 
 app = Flask(__name__)
+
+def get_area_info(area_id):
+    """
+    Get area name and country info using RA's GET_RELATED_AREA query
+    """
+    try:
+        url = 'https://ra.co/graphql'
+        headers = {
+            'Content-Type': 'application/json',
+            'Referer': 'https://ra.co/events',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/106.0'
+        }
+        
+        payload = {
+            "operationName": "GET_RELATED_AREA",
+            "variables": {
+                "areaId": str(area_id),
+                "count": 1,
+                "dateFrom": "2025-08-06",
+                "dateTo": "2025-08-10"
+            },
+            "query": """query GET_RELATED_AREA($areaId: ID, $dateFrom: DateTime, $dateTo: DateTime, $count: Int!) {
+                area(id: $areaId) {
+                    id
+                    name
+                    urlName
+                    country {
+                        id
+                        name
+                        urlCode
+                        __typename
+                    }
+                    __typename
+                }
+            }"""
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data and data['data']['area']:
+                area_data = data['data']['area']
+                return {
+                    "id": area_data.get("id"),
+                    "name": area_data.get("name"),
+                    "url_name": area_data.get("urlName"),
+                    "country": {
+                        "name": area_data.get("country", {}).get("name"),
+                        "code": area_data.get("country", {}).get("urlCode")
+                    }
+                }
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error getting area info for {area_id}: {e}")
+        return None
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -66,6 +125,9 @@ def get_events():
         event_fetcher = EventFetcher(area, listing_date_gte, listing_date_lte)
         events = event_fetcher.fetch_all_events()
         
+        # Get area information
+        area_info = get_area_info(area)
+        
         if output_format == 'csv':
             # Create temporary CSV file
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', encoding='utf-8') as tmp_file:
@@ -97,10 +159,7 @@ def get_events():
                     "artists": [artist.get("name") for artist in event_data.get("artists", [])],
                     "venue": {
                         "name": event_data.get("venue", {}).get("name"),
-                        "url": event_data.get("venue", {}).get("contentUrl"),
-                        "city": event_data.get("venue", {}).get("city"),
-                        "area": event_data.get("venue", {}).get("area"),
-                        "country": event_data.get("venue", {}).get("country")
+                        "url": event_data.get("venue", {}).get("contentUrl")
                     },
                     "event_url": event_data.get("contentUrl"),
                     "attending": event_data.get("attending"),
@@ -109,7 +168,7 @@ def get_events():
                 })
             
             return jsonify({
-                "area": area,
+                "area": area_info if area_info else {"id": area, "name": "Unknown"},
                 "start_date": start_date,
                 "end_date": end_date,
                 "count": len(events_json),
