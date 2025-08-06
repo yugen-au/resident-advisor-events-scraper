@@ -557,10 +557,6 @@ def get_artist_labels(slug):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
-
 # ============ LABEL ENDPOINTS ============
 
 @app.route('/label/search', methods=['GET'])
@@ -820,3 +816,8 @@ def get_popular_reviews():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
