@@ -1121,3 +1121,50 @@ def get_trending_reviews():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ============ ESSENTIAL ENDPOINTS ============
+
+@app.route('/search', methods=['GET'])
+def search():
+    q = request.args.get('q', '')
+    if not q: return jsonify({"error": "Missing q parameter"}), 400
+    
+    results = search_global(q, ["ARTIST", "LABEL"])
+    return jsonify({"results": [{"type": r['searchType'], "name": r['value'], "url": r['contentUrl'], "id": r['id']} for r in results]})
+
+@app.route('/artist/<slug>', methods=['GET'])
+def artist_profile(slug):
+    artist = get_artist_by_slug(slug)
+    if not artist: return jsonify({"error": "Artist not found"}), 404
+    
+    return jsonify({
+        "name": artist.get('name'),
+        "bio": artist.get('biography', {}).get('blurb'),
+        "full_bio": artist.get('biography', {}).get('content'),
+        "country": artist.get('country', {}).get('name'),
+        "social": {"soundcloud": artist.get('soundcloud'), "instagram": artist.get('instagram')}
+    })
+
+@app.route('/artist/<slug>/related', methods=['GET'])
+def artist_related(slug):
+    artist = get_artist_by_slug(slug)
+    if not artist: return jsonify({"error": "Artist not found"}), 404
+    
+    related = get_related_artists(artist['id'])
+    return jsonify({"related": [{"name": a['name'], "slug": a['contentUrl'].split('/')[-1]} for a in related]})
+
+@app.route('/label/<label_id>', methods=['GET'])
+def label_profile(label_id):
+    label = get_label_info(label_id)
+    if not label: return jsonify({"error": "Label not found"}), 404
+    
+    return jsonify({
+        "name": label.get('name'),
+        "description": label.get('blurb'),
+        "artists": [{"name": a['name'], "slug": a['contentUrl'].split('/')[-1]} for a in label.get('artists', [])[:20]]
+    })
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
