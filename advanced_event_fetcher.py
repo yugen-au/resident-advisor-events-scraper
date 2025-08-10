@@ -30,13 +30,6 @@ class AdvancedFilterExpression:
     
     def _parse_expression(self, expression: str):
         """Parse filter expression into GraphQL and client-side components"""
-        # Enhanced parser for expressions like:
-        # "genre:has:techno" - event has techno genre
-        # "genre:contains_all:techno,industrial" - event has ALL specified genres
-        # "genre:contains_any:techno,house" - event has ANY of specified genres
-        # "genre:in:techno,house" - genre is one of these (OR logic)
-        # "genre:has:techno AND genre:has:industrial" - event has both genres (AND logic)
-        
         # Split by logical operators
         parts = re.split(r'\s+(AND|OR|NOT)\s+', expression)
         
@@ -60,11 +53,6 @@ class AdvancedFilterExpression:
     
     def _can_handle_in_graphql(self, field: str, operator: str, values: str) -> bool:
         """Check if this filter can be handled by GraphQL"""
-        # Based on our testing, RA GraphQL supports:
-        # - eq, ne for single values
-        # - gte, lte for dates
-        # Multi-value operators need client-side processing
-        
         if operator in ['eq', 'ne', 'gte', 'lte']:
             return True
         if operator in ['in', 'has', 'contains_all', 'contains_any', 'nin']:
@@ -190,65 +178,38 @@ class AdvancedFilterExpression:
         """Extract field values from event object (can return single value or array)"""
         
         if field == 'genre':
-            # Try multiple sources for genre information
-            event_data = event.get('event', {})
-            
-            # Check pick field
-            pick = event_data.get('pick', {})
-            if pick and 'genre' in pick:
-                genre = pick.get('genre')
-                return genre if isinstance(genre, list) else [genre] if genre else []
-            
-            # Try to infer from artists (artists might have genre info)
-            artists = event_data.get('artists', [])
-            genres = []
-            for artist in artists:
-                if 'genre' in artist:
-                    artist_genre = artist.get('genre')
-                    if isinstance(artist_genre, list):
-                        genres.extend(artist_genre)
-                    elif artist_genre:
-                        genres.append(artist_genre)
-            
-            if genres:
-                return genres
-            
-            # Fallback: try direct genre field
-            direct_genre = event_data.get('genre')
-            if direct_genre:
-                return direct_genre if isinstance(direct_genre, list) else [direct_genre]
-            
-            # If no genre found, return empty list
+            # For now, return empty list since genre data structure is complex
+            # This would need enhancement based on actual RA data structure
             return []
         
         elif field == 'artists':
             # Get artist names
             event_data = event.get('event', {})
             artists = event_data.get('artists', [])
-            return [artist.get('name', '') for artist in artists if artist.get('name')]
+            return [artist.get('name', '').lower() for artist in artists if artist.get('name')]
         
         elif field == 'eventType':
             event_data = event.get('event', {})
             event_type = event_data.get('eventType', '')
-            return [event_type] if event_type else []
+            return [event_type.lower()] if event_type else []
         
         elif field == 'venue':
             event_data = event.get('event', {})
             venue = event_data.get('venue', {})
             venue_name = venue.get('name', '')
-            return [venue_name] if venue_name else []
+            return [venue_name.lower()] if venue_name else []
         
         elif field == 'area':
             # Area would be in the venue or location
             event_data = event.get('event', {})
             venue = event_data.get('venue', {})
             area = venue.get('area', '')
-            return [area] if area else []
+            return [area.lower()] if area else []
         
         # Default: try direct access
         event_data = event.get('event', {})
         value = event_data.get(field, '')
-        return [value] if value else []
+        return [value.lower()] if value else []
 
 
 class EnhancedEventFetcher:
@@ -388,6 +349,296 @@ class EnhancedEventFetcher:
                 ]
             }
         }
+
+    def _get_sort_config(self):
+        """Get sorting configuration based on sort_by parameter."""
+        sort_configs = {
+            "listingDate": {
+                "listingDate": {"order": "ASCENDING"},
+                "score": {"order": "DESCENDING"},
+                "titleKeyword": {"order": "ASCENDING"}
+            },
+            "score": {
+                "score": {"order": "DESCENDING"},
+                "listingDate": {"order": "ASCENDING"},
+                "titleKeyword": {"order": "ASCENDING"}
+            },
+            "title": {
+                "titleKeyword": {"order": "ASCENDING"},
+                "listingDate": {"order": "ASCENDING"},
+                "score": {"order": "DESCENDING"}
+            }
+        }
+        return sort_configs.get(self.sort_by, sort_configs["listingDate"])
+
+    def get_events(self, page_number):
+        """Fetch events for the given page number."""
+        self.payload["variables"]["page"] = page_number
+        response = requests.post(URL, headers=HEADERS, json=self.payload)
+
+        try:
+            response.raise_for_status()
+            data = response.json()
+        except (requests.exceptions.RequestException, ValueError) as e:
+            print(f"Error fetching events: {e}")
+            return {"events": [], "bumps": [], "filter_options": {}}
+
+        if 'errors' in data:
+            print(f"GraphQL errors: {data['errors']}")
+            return {"events": [], "bumps": [], "filter_options": {}}
+
+        if self.include_bumps:
+            event_data = data.get("data", {}).get("eventListingsWithBumps", {})
+        else:
+            event_data = data.get("data", {}).get("eventListings", {})
+
+        events = event_data.get("eventListings", {}).get("data", [])
+        bumps_raw = event_data.get("bumps", [])
+        
+        # Process bumps to extract events (with safety checks)
+        bumps = []
+        if isinstance(bumps_raw, list):
+            for bump in bumps_raw:
+                if isinstance(bump, dict):
+                    bump_decision = bump.get("bumpDecision", {})
+                    if isinstance(bump_decision, dict) and bump_decision.get("event"):
+                        bumps.append(bump_decision)
+        
+        filter_options = event_data.get("eventListings", {}).get("filterOptions", {})
+
+        return {
+            "events": events,
+            "bumps": bumps,
+            "filter_options": filter_options
+        }
+
+    def save_events_to_csv(self, events_data, output_file):
+        """Save events to CSV with enhanced data"""
+        events = events_data.get("events", [])
+        
+        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = [
+                'event_id', 'title', 'date', 'start_time', 'end_time',
+                'venue_name', 'venue_id', 'artists', 'interested_count',
+                'is_ticketed', 'content_url', 'flyer_front', 'promoters'
+            ]
+            
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for event_item in events:
+                event = event_item.get('event', {})
+                
+                # Extract artist names
+                artists = ', '.join([artist.get('name', '') for artist in event.get('artists', [])])
+                
+                # Extract promoter info
+                promoters = ', '.join([f"ID:{p.get('id', '')}" for p in event.get('promoters', [])])
+                
+                row = {
+                    'event_id': event.get('id', ''),
+                    'title': event.get('title', ''),
+                    'date': event.get('date', ''),
+                    'start_time': event.get('startTime', ''),
+                    'end_time': event.get('endTime', ''),
+                    'venue_name': event.get('venue', {}).get('name', ''),
+                    'venue_id': event.get('venue', {}).get('id', ''),
+                    'artists': artists,
+                    'interested_count': event.get('interestedCount', 0),
+                    'is_ticketed': event.get('isTicketed', False),
+                    'content_url': event.get('contentUrl', ''),
+                    'flyer_front': event.get('flyerFront', ''),
+                    'promoters': promoters
+                }
+                
+                writer.writerow(row)
+
+    def _get_enhanced_query(self):
+        """Get the enhanced GraphQL query with bumps support."""
+        return """query GET_EVENT_LISTINGS_WITH_BUMPS($filters: FilterInputDtoInput, $filterOptions: FilterOptionsInputDtoInput, $page: Int, $pageSize: Int, $sort: SortInputDtoInput, $areaId: ID) {
+  eventListingsWithBumps(
+    filters: $filters
+    filterOptions: $filterOptions
+    pageSize: $pageSize
+    page: $page
+    sort: $sort
+    areaId: $areaId
+  ) {
+    eventListings {
+      data {
+        id
+        listingDate
+        event {
+          ...eventListingsFields
+          __typename
+        }
+        __typename
+      }
+      filterOptions {
+        genre {
+          label
+          value
+          count
+          __typename
+        }
+        eventType {
+          value
+          count
+          __typename
+        }
+        location {
+          value {
+            from
+            to
+            __typename
+          }
+          count
+          __typename
+        }
+        __typename
+      }
+      totalResults
+      __typename
+    }
+    bumps {
+      bumpDecision {
+        id
+        date
+        eventId
+        clickUrl
+        impressionUrl
+        event {
+          ...eventListingsFields
+          artists {
+            id
+            name
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}
+
+fragment eventListingsFields on Event {
+  id
+  date
+  startTime
+  endTime
+  title
+  contentUrl
+  flyerFront
+  isTicketed
+  interestedCount
+  isSaved
+  isInterested
+  queueItEnabled
+  newEventForm
+  images {
+    id
+    filename
+    alt
+    type
+    crop
+    __typename
+  }
+  pick {
+    id
+    blurb
+    __typename
+  }
+  venue {
+    id
+    name
+    contentUrl
+    live
+    __typename
+  }
+  promoters {
+    id
+    __typename
+  }
+  artists {
+    id
+    name
+    __typename
+  }
+  tickets(queryType: AVAILABLE) {
+    validType
+    onSaleFrom
+    onSaleUntil
+    __typename
+  }
+  __typename
+}"""
+
+    def _get_basic_query(self):
+        """Get the basic GraphQL query without bumps."""
+        return """query GET_EVENT_LISTINGS($filters: FilterInputDtoInput, $filterOptions: FilterOptionsInputDtoInput, $page: Int, $pageSize: Int) {
+  eventListings(filters: $filters, filterOptions: $filterOptions, pageSize: $pageSize, page: $page) {
+    data {
+      id
+      listingDate
+      event {
+        ...eventListingsFields
+        artists {
+          id
+          name
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    filterOptions {
+      genre {
+        label
+        value
+        count
+        __typename
+      }
+      eventType {
+        value
+        count
+        __typename
+      }
+      __typename
+    }
+    totalResults
+    __typename
+  }
+}
+
+fragment eventListingsFields on Event {
+  id
+  date
+  startTime
+  endTime
+  title
+  contentUrl
+  flyerFront
+  isTicketed
+  interestedCount
+  isSaved
+  isInterested
+  queueItEnabled
+  newEventForm
+  images {
+    id
+    filename
+    alt
+    type
+    crop
+    __typename
+  }
+  pick {
+    id
+    blurb
+    __typename
   }
   venue {
     id
@@ -430,25 +681,7 @@ def main():
     parser.add_argument("--no-bumps", action="store_true", help="Exclude bumped events")
     
     # Advanced multi-value filter
-    parser.add_argument("-f", "--filter", help="""Advanced filter expression with multi-value support
-    
-    Operators:
-    - eq: equals (exact match)
-    - ne: not equals  
-    - in: in array (OR logic)
-    - nin: not in array
-    - has: has specific value (for multi-value fields)
-    - contains_all: has ALL specified values (AND logic)
-    - contains_any: has ANY specified values (OR logic)
-    - contains_none: has NONE of specified values
-    
-    Examples:
-    - genre:has:techno (events with techno genre)
-    - genre:contains_all:techno,industrial (events with BOTH techno AND industrial)
-    - genre:contains_any:techno,house (events with techno OR house)
-    - genre:has:techno AND eventType:eq:club (techno club events)
-    - artists:has:charlotte AND genre:contains_any:techno,minimal (Charlotte de Witte techno/minimal events)
-    """)
+    parser.add_argument("-f", "--filter", help="Advanced filter expression with multi-value support")
     
     args = parser.parse_args()
     
