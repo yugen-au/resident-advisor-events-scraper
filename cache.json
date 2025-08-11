@@ -1,0 +1,65 @@
+{
+  "cached_areas": [
+    {
+      "area_name": "sydney",
+      "country_code": "au",
+      "area_id": "1",
+      "last_updated": "2025-08-11T15:17:40.503776"
+    },
+    {
+      "area_name": "melbourne",
+      "country_code": "au", 
+      "area_id": "2",
+      "last_updated": "2025-08-11T15:19:35.230002"
+    },
+    {
+      "area_name": "perth",
+      "country_code": "au",
+      "area_id": "3", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "brisbane",
+      "country_code": "au",
+      "area_id": "12", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "adelaide",
+      "country_code": "au",
+      "area_id": "5", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "canberra",
+      "country_code": "au",
+      "area_id": "4", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "hobart",
+      "country_code": "au",
+      "area_id": "6", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "london",
+      "country_code": "uk",
+      "area_id": "13", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "berlin",
+      "country_code": "de",
+      "area_id": "34", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    },
+    {
+      "area_name": "new york",
+      "country_code": "us",
+      "area_id": "8", 
+      "last_updated": "2025-08-11T15:20:11.329049"
+    }
+  ],
+  "last_updated": "2025-08-11T16:30:00.000000"
+}

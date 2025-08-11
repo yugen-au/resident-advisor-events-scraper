@@ -42,9 +42,6 @@ v3_debug_log.txt
 *.sqlite
 *.sqlite3
 
-# Cache files
-cache.json
-
 # Test files
 test_*.json
 
