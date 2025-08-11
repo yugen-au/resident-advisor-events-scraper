@@ -10,6 +10,9 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy the cache file first to ensure it's included
+COPY cache.json .
+
 # Copy application code
 COPY . .
 

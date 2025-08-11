@@ -17,6 +17,331 @@ HEADERS = {
 }
 DELAY = 1  # Rate limiting delay
 
+class AdvancedFilterManager:
+    """Generic manager for handling complex filtering operations for fields not directly in JSON"""
+    
+    def __init__(self, base_fetcher):
+        self.base_fetcher = base_fetcher  # Reference to the EnhancedEventFetcher instance
+        self.cache = {}  # Cache for query results
+    
+    def get_events_with_filter(self, field, value, operator="eq"):
+        """Get events with a specific field filter"""
+        cache_key = f"{field}_{operator}_{value}"
+        
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        # Create a new fetcher instance with just this filter
+        from enhanced_event_fetcher_v2 import EnhancedEventFetcherV2
+        
+        # Build appropriate filter expression based on field and operator
+        filter_expression = f"{field}:{operator}:{value}"
+        
+        fetcher = EnhancedEventFetcherV2(
+            areas=self.base_fetcher.areas,
+            listing_date_gte=self.base_fetcher.listing_date_gte,
+            listing_date_lte=self.base_fetcher.listing_date_lte,
+            sort_by=self.base_fetcher.sort_by,
+            include_bumps=self.base_fetcher.include_bumps,
+            filter_expression=filter_expression
+        )
+        
+        # Fetch events with this specific filter
+        events_data = fetcher.fetch_all_events()
+        
+        # Cache the results
+        self.cache[cache_key] = {
+            "events": events_data.get("events", []),
+            "bumps": events_data.get("bumps", [])
+        }
+        
+        return self.cache[cache_key]
+    
+    def contains_all(self, field, values):
+        """Get events that contain ALL of the specified values for the field"""
+        if not values:
+            return {"events": [], "bumps": []}
+        
+        # Get events for the first value
+        result = self.get_events_with_filter(field, values[0])
+        events = result["events"]
+        bumps = result["bumps"]
+        
+        # For each additional value, intersect the results
+        for value in values[1:]:
+            value_result = self.get_events_with_filter(field, value)
+            
+            # Create sets of event IDs for intersection
+            current_event_ids = {event.get('event', {}).get('id') for event in events}
+            value_event_ids = {event.get('event', {}).get('id') for event in value_result["events"]}
+            
+            # Intersect the sets
+            common_ids = current_event_ids.intersection(value_event_ids)
+            
+            # Filter events to only those in the intersection
+            events = [event for event in events if event.get('event', {}).get('id') in common_ids]
+            
+            # Do the same for bumps
+            current_bump_ids = {bump.get('event', {}).get('id') for bump in bumps}
+            value_bump_ids = {bump.get('event', {}).get('id') for bump in value_result["bumps"]}
+            common_bump_ids = current_bump_ids.intersection(value_bump_ids)
+            bumps = [bump for bump in bumps if bump.get('event', {}).get('id') in common_bump_ids]
+        
+        return {"events": events, "bumps": bumps}
+    
+    def contains_any(self, field, values):
+        """Get events that contain ANY of the specified values for the field
+        This maps directly to the V2 'any' operator"""
+        
+        # For contains_any, we can use the native GraphQL 'any' operator
+        from enhanced_event_fetcher_v2 import EnhancedEventFetcherV2
+        
+        # For all fields, use the filter expression approach
+        filter_expression = f"{field}:any:{','.join(values)}"
+        
+        fetcher = EnhancedEventFetcherV2(
+            areas=self.base_fetcher.areas,
+            listing_date_gte=self.base_fetcher.listing_date_gte,
+            listing_date_lte=self.base_fetcher.listing_date_lte,
+            sort_by=self.base_fetcher.sort_by,
+            include_bumps=self.base_fetcher.include_bumps,
+            filter_expression=filter_expression
+        )
+        
+        # Fetch events with ANY of these values
+        events_data = fetcher.fetch_all_events()
+        
+        return {
+            "events": events_data.get("events", []),
+            "bumps": events_data.get("bumps", [])
+        }
+    
+    def contains_none(self, field, values):
+        """Get events that contain NONE of the specified values for the field
+        This is the inverse of contains_any"""
+        
+        # First, get all events without any filter
+        from enhanced_event_fetcher_v2 import EnhancedEventFetcherV2
+        
+        fetcher = EnhancedEventFetcherV2(
+            areas=self.base_fetcher.areas,
+            listing_date_gte=self.base_fetcher.listing_date_gte,
+            listing_date_lte=self.base_fetcher.listing_date_lte,
+            sort_by=self.base_fetcher.sort_by,
+            include_bumps=self.base_fetcher.include_bumps
+        )
+        
+        # Fetch all events
+        all_events_data = fetcher.fetch_all_events()
+        all_events = all_events_data.get("events", [])
+        all_bumps = all_events_data.get("bumps", [])
+        
+        # Then get events with any of these values
+        any_result = self.contains_any(field, values)
+        any_event_ids = {event.get('event', {}).get('id') for event in any_result["events"]}
+        any_bump_ids = {bump.get('event', {}).get('id') for bump in any_result["bumps"]}
+        
+        # Exclude events with any of these values
+        events = [event for event in all_events if event.get('event', {}).get('id') not in any_event_ids]
+        bumps = [bump for bump in all_bumps if bump.get('event', {}).get('id') not in any_bump_ids]
+        
+        return {"events": events, "bumps": bumps}
+    
+    def greater_than(self, field, value):
+        """Get events with field value greater than the specified value"""
+        # This would require custom implementation since GraphQL doesn't support it directly
+        # For now, fetch all events and filter client-side
+        from enhanced_event_fetcher_v2 import EnhancedEventFetcherV2
+        
+        fetcher = EnhancedEventFetcherV2(
+            areas=self.base_fetcher.areas,
+            listing_date_gte=self.base_fetcher.listing_date_gte,
+            listing_date_lte=self.base_fetcher.listing_date_lte,
+            sort_by=self.base_fetcher.sort_by,
+            include_bumps=self.base_fetcher.include_bumps
+        )
+        
+        # Fetch all events
+        all_events_data = fetcher.fetch_all_events()
+        all_events = all_events_data.get("events", [])
+        all_bumps = all_events_data.get("bumps", [])
+        
+        # Filter events client-side
+        # This is a simplified implementation - actual implementation would need
+        # to properly extract field values and handle numeric comparison
+        threshold = float(value)
+        filtered_events = []
+        filtered_bumps = []
+        
+        for event in all_events:
+            event_data = event.get('event', {})
+            event_value = None
+            
+            # Extract appropriate field value based on field type
+            if field == 'price':
+                # Price might be in various formats
+                # For demo purposes, we'll just extract numeric part
+                price_str = event_data.get('price', '0')
+                try:
+                    event_value = float(re.sub(r'[^\d.]', '', price_str))
+                except ValueError:
+                    event_value = 0
+            elif field == 'interested' or field == 'interestedCount':
+                event_value = float(event_data.get('interestedCount', 0))
+            
+            # Add event if value exceeds threshold
+            if event_value is not None and event_value > threshold:
+                filtered_events.append(event)
+        
+        # Similar logic for bumps
+        for bump in all_bumps:
+            bump_data = bump.get('event', {})
+            bump_value = None
+            
+            if field == 'price':
+                price_str = bump_data.get('price', '0')
+                try:
+                    bump_value = float(re.sub(r'[^\d.]', '', price_str))
+                except ValueError:
+                    bump_value = 0
+            elif field == 'interested' or field == 'interestedCount':
+                bump_value = float(bump_data.get('interestedCount', 0))
+            
+            if bump_value is not None and bump_value > threshold:
+                filtered_bumps.append(bump)
+        
+        return {"events": filtered_events, "bumps": filtered_bumps}
+    
+    def less_than(self, field, value):
+        """Get events with field value less than the specified value"""
+        # Similar to greater_than but with opposite comparison
+        # Implementation follows same pattern as greater_than
+        from enhanced_event_fetcher_v2 import EnhancedEventFetcherV2
+        
+        fetcher = EnhancedEventFetcherV2(
+            areas=self.base_fetcher.areas,
+            listing_date_gte=self.base_fetcher.listing_date_gte,
+            listing_date_lte=self.base_fetcher.listing_date_lte,
+            sort_by=self.base_fetcher.sort_by,
+            include_bumps=self.base_fetcher.include_bumps
+        )
+        
+        all_events_data = fetcher.fetch_all_events()
+        all_events = all_events_data.get("events", [])
+        all_bumps = all_events_data.get("bumps", [])
+        
+        threshold = float(value)
+        filtered_events = []
+        filtered_bumps = []
+        
+        for event in all_events:
+            event_data = event.get('event', {})
+            event_value = None
+            
+            if field == 'price':
+                price_str = event_data.get('price', '0')
+                try:
+                    event_value = float(re.sub(r'[^\d.]', '', price_str))
+                except ValueError:
+                    event_value = 0
+            elif field == 'interested' or field == 'interestedCount':
+                event_value = float(event_data.get('interestedCount', 0))
+            
+            if event_value is not None and event_value < threshold:
+                filtered_events.append(event)
+        
+        for bump in all_bumps:
+            bump_data = bump.get('event', {})
+            bump_value = None
+            
+            if field == 'price':
+                price_str = bump_data.get('price', '0')
+                try:
+                    bump_value = float(re.sub(r'[^\d.]', '', price_str))
+                except ValueError:
+                    bump_value = 0
+            elif field == 'interested' or field == 'interestedCount':
+                bump_value = float(bump_data.get('interestedCount', 0))
+            
+            if bump_value is not None and bump_value < threshold:
+                filtered_bumps.append(bump)
+        
+        return {"events": filtered_events, "bumps": filtered_bumps}
+    
+    def between(self, field, min_value, max_value):
+        """Get events with field value between min and max (inclusive)"""
+        # Implementation combines greater_than_equal and less_than_equal
+        from enhanced_event_fetcher_v2 import EnhancedEventFetcherV2
+        
+        fetcher = EnhancedEventFetcherV2(
+            areas=self.base_fetcher.areas,
+            listing_date_gte=self.base_fetcher.listing_date_gte,
+            listing_date_lte=self.base_fetcher.listing_date_lte,
+            sort_by=self.base_fetcher.sort_by,
+            include_bumps=self.base_fetcher.include_bumps
+        )
+        
+        all_events_data = fetcher.fetch_all_events()
+        all_events = all_events_data.get("events", [])
+        all_bumps = all_events_data.get("bumps", [])
+        
+        min_threshold = float(min_value)
+        max_threshold = float(max_value)
+        filtered_events = []
+        filtered_bumps = []
+        
+        for event in all_events:
+            event_data = event.get('event', {})
+            event_value = None
+            
+            if field == 'price':
+                price_str = event_data.get('price', '0')
+                try:
+                    event_value = float(re.sub(r'[^\d.]', '', price_str))
+                except ValueError:
+                    event_value = 0
+            elif field == 'interested' or field == 'interestedCount':
+                event_value = float(event_data.get('interestedCount', 0))
+            
+            if event_value is not None and min_threshold <= event_value <= max_threshold:
+                filtered_events.append(event)
+        
+        for bump in all_bumps:
+            bump_data = bump.get('event', {})
+            bump_value = None
+            
+            if field == 'price':
+                price_str = bump_data.get('price', '0')
+                try:
+                    bump_value = float(re.sub(r'[^\d.]', '', price_str))
+                except ValueError:
+                    bump_value = 0
+            elif field == 'interested' or field == 'interestedCount':
+                bump_value = float(bump_data.get('interestedCount', 0))
+            
+            if bump_value is not None and min_threshold <= bump_value <= max_threshold:
+                filtered_bumps.append(bump)
+        
+        return {"events": filtered_events, "bumps": filtered_bumps}
+
+class GenreQueryManager(AdvancedFilterManager):
+    """Specialized manager for genre filtering operations"""
+    
+    def __init__(self, base_fetcher):
+        super().__init__(base_fetcher)
+    
+    def contains_all(self, values):
+        """Specialized version that always uses 'genre' as the field"""
+        return super().contains_all('genre', values)
+    
+    def contains_any(self, values):
+        """Specialized version that always uses 'genre' as the field"""
+        return super().contains_any('genre', values)
+    
+    def contains_none(self, values):
+        """Specialized version that always uses 'genre' as the field"""
+        return super().contains_none('genre', values)
+
 class AdvancedFilterExpression:
     """Parse and apply complex filter expressions with multi-value field support"""
     
@@ -45,6 +370,11 @@ class AdvancedFilterExpression:
             if ':' in part:
                 field, operator, values = part.split(':', 2)
                 
+                # Special case for genre:contains_any which maps to GraphQL genre:any
+                if field == 'genre' and operator == 'contains_any':
+                    self._add_graphql_filter(field, 'any', values)
+                    continue
+                
                 # Check if we can handle this in GraphQL
                 if self._can_handle_in_graphql(field, operator, values):
                     self._add_graphql_filter(field, operator, values)
@@ -53,26 +383,23 @@ class AdvancedFilterExpression:
     
     def _can_handle_in_graphql(self, field: str, operator: str, values: str) -> bool:
         """Check if this filter can be handled by GraphQL"""
-        if operator in ['eq', 'ne', 'gte', 'lte']:
+        # Only 'eq' and 'any' operators are supported by GraphQL in V2
+        if operator in ['eq', 'any']:
             return True
-        if operator in ['in', 'has', 'contains_all', 'contains_any', 'nin']:
-            return False  # Require client-side processing
+        # All other operators require client-side processing
+        if operator in ['in', 'has', 'contains_all', 'contains_any', 'all', 
+                       'gt', 'lt', 'gte', 'lte', 'between', 'starts', 'ends', 'nin']:
+            return False
         return False
     
     def _add_graphql_filter(self, field: str, operator: str, values: str):
         """Add filter that can be handled by GraphQL"""
         if operator == 'eq':
             self.graphql_filters[field] = {"eq": values}
-        elif operator == 'ne':
-            self.graphql_filters[field] = {"ne": values}
-        elif operator == 'gte':
-            if field not in self.graphql_filters:
-                self.graphql_filters[field] = {}
-            self.graphql_filters[field]["gte"] = values
-        elif operator == 'lte':
-            if field not in self.graphql_filters:
-                self.graphql_filters[field] = {}
-            self.graphql_filters[field]["lte"] = values
+        elif operator == 'any':
+            # For multi-value OR filtering
+            value_list = [v.strip() for v in values.split(',')]
+            self.graphql_filters[field] = {"any": value_list}
     
     def _add_client_filter(self, field: str, operator: str, values: str, logical_op: str):
         """Add filter that needs client-side processing"""
@@ -142,10 +469,6 @@ class AdvancedFilterExpression:
             # Exact match (any event value equals any filter value)
             return any(ev in filter_values for ev in event_values)
         
-        elif operator == 'ne':
-            # Not equal (no event value equals any filter value)
-            return not any(ev in filter_values for ev in event_values)
-        
         elif operator == 'in':
             # Same as eq for multi-value fields (OR logic)
             return any(ev in filter_values for ev in event_values)
@@ -156,19 +479,83 @@ class AdvancedFilterExpression:
         
         elif operator == 'has':
             # Event has this specific value (for single value checks)
-            return filter_values[0] in event_values
+            for fv in filter_values:
+                if any(fv.lower() in ev.lower() for ev in event_values):
+                    return True
+            return False
         
         elif operator == 'contains_all':
             # Event has ALL of the specified values (AND logic)
             return all(fv in event_values for fv in filter_values)
         
         elif operator == 'contains_any':
-            # Event has ANY of the specified values (OR logic)  
+            # Event has ANY of the specified values (OR logic)
+            # Note: For genres, this is handled differently using V2's native any operator
+            # This client-side filtering is only a fallback for other fields
             return any(fv in event_values for fv in filter_values)
         
         elif operator == 'contains_none':
             # Event has NONE of the specified values
             return not any(fv in event_values for fv in filter_values)
+
+        elif operator == 'all':
+            # Same as contains_all but more readable
+            return all(fv in event_values for fv in filter_values)
+            
+        elif operator == 'gt' or operator == 'lt' or operator == 'gte' or operator == 'lte':
+            # Numeric comparisons
+            if not event_values or not filter_values:
+                return False
+                
+            try:
+                # Convert to numeric values
+                numeric_event_values = [float(ev) for ev in event_values]
+                numeric_filter_value = float(filter_values[0])  # Use first value only
+                
+                if operator == 'gt':
+                    return any(ev > numeric_filter_value for ev in numeric_event_values)
+                elif operator == 'lt':
+                    return any(ev < numeric_filter_value for ev in numeric_event_values)
+                elif operator == 'gte':
+                    return any(ev >= numeric_filter_value for ev in numeric_event_values)
+                elif operator == 'lte':
+                    return any(ev <= numeric_filter_value for ev in numeric_event_values)
+            except (ValueError, TypeError):
+                # If conversion fails, treat as false
+                return False
+                
+        elif operator == 'between':
+            # Range filtering (requires two values: min and max)
+            if not event_values or len(filter_values) < 2:
+                return False
+                
+            try:
+                # Convert to numeric values
+                numeric_event_values = [float(ev) for ev in event_values]
+                min_val = float(filter_values[0])
+                max_val = float(filter_values[1])
+                
+                # Check if any event value is within range
+                return any(min_val <= ev <= max_val for ev in numeric_event_values)
+            except (ValueError, TypeError):
+                # If conversion fails, treat as false
+                return False
+                
+        elif operator == 'starts':
+            # String prefix matching
+            if not event_values or not filter_values:
+                return False
+                
+            prefix = filter_values[0].lower()
+            return any(ev.startswith(prefix) for ev in event_values)
+            
+        elif operator == 'ends':
+            # String suffix matching
+            if not event_values or not filter_values:
+                return False
+                
+            suffix = filter_values[0].lower()
+            return any(ev.endswith(suffix) for ev in event_values)
         
         else:
             # Unknown operator, don't filter
@@ -177,37 +564,99 @@ class AdvancedFilterExpression:
     def _get_event_field_values(self, event: Dict, field: str) -> Union[str, List[str]]:
         """Extract field values from event object (can return single value or array)"""
         
+        event_data = event.get('event', {})
+        
         if field == 'genre':
-            # For now, return empty list since genre data structure is complex
-            # This would need enhancement based on actual RA data structure
-            return []
+            # Extract genres from filter options
+            # Since genre data isn't directly available in the event object,
+            # we need to use filter_options to map genre values or implement a lookup system
+            
+            # We can access filter options when we make the request but it's not in the event object
+            # For now, we'll check if there's a genre match based on the current filter
+            # and later implement a more robust approach
+            
+            # This is a placeholder for the genre extraction logic
+            # In a real implementation, we would need to either:
+            # 1. Use a separate request to get genre info for each event
+            # 2. Parse from other fields like title, description, or metadata
+            # 3. Implement a caching mechanism for genre information
+            
+            # For testing, extract any genre-like keywords from the title
+            title = event_data.get('title', '').lower()
+            common_genres = [
+                'techno', 'house', 'ambient', 'trance', 'drum and bass', 'dnb',
+                'minimal', 'deep house', 'tech house', 'progressive', 'disco',
+                'funk', 'jazz', 'experimental', 'hip-hop', 'dubstep', 'garage'
+            ]
+            
+            found_genres = []
+            for genre in common_genres:
+                if genre in title:
+                    found_genres.append(genre)
+            
+            # Add extra handling for multi-word genres
+            if 'drum' in title and 'bass' in title:
+                found_genres.append('drum and bass')
+            if 'deep' in title and 'house' in title:
+                found_genres.append('deep house')
+            if 'tech' in title and 'house' in title:
+                found_genres.append('tech house')
+            
+            return found_genres
         
         elif field == 'artists':
             # Get artist names
-            event_data = event.get('event', {})
             artists = event_data.get('artists', [])
             return [artist.get('name', '').lower() for artist in artists if artist.get('name')]
         
         elif field == 'eventType':
-            event_data = event.get('event', {})
             event_type = event_data.get('eventType', '')
             return [event_type.lower()] if event_type else []
         
         elif field == 'venue':
-            event_data = event.get('event', {})
             venue = event_data.get('venue', {})
             venue_name = venue.get('name', '')
             return [venue_name.lower()] if venue_name else []
         
         elif field == 'area':
             # Area would be in the venue or location
-            event_data = event.get('event', {})
             venue = event_data.get('venue', {})
             area = venue.get('area', '')
             return [area.lower()] if area else []
+            
+        elif field == 'price' or field == 'cost':
+            # Try to extract price/cost information if available
+            # This would need to be adjusted based on actual data structure
+            price = event_data.get('price', '')
+            if not price:
+                price = event_data.get('cost', '')
+            return [price] if price else []
+            
+        elif field == 'title':
+            title = event_data.get('title', '')
+            return [title.lower()] if title else []
+            
+        elif field == 'date':
+            date = event_data.get('date', '')
+            return [date] if date else []
+            
+        elif field == 'time' or field == 'startTime':
+            time = event_data.get('startTime', '')
+            return [time] if time else []
+            
+        elif field == 'endTime':
+            time = event_data.get('endTime', '')
+            return [time] if time else []
+            
+        elif field == 'interested' or field == 'interestedCount':
+            count = event_data.get('interestedCount', '')
+            return [str(count)] if count != '' else []
+            
+        elif field == 'isTicketed':
+            is_ticketed = event_data.get('isTicketed', '')
+            return [str(is_ticketed).lower()] if is_ticketed != '' else []
         
-        # Default: try direct access
-        event_data = event.get('event', {})
+        # Default: try direct access to event data
         value = event_data.get(field, '')
         return [value.lower()] if value else []
 
@@ -298,55 +747,336 @@ class EnhancedEventFetcher:
     def fetch_all_events(self):
         """Fetch all events with enhanced multi-value filtering applied"""
         print(f"Fetching events with enhanced multi-value filtering...")
+        
+        # Extract any filters that need special handling
+        special_filters = []
+        other_filters = []
+        
         if self.filter_expr and self.filter_expr.client_filters:
-            print(f"Client-side filters will be applied: {len(self.filter_expr.client_filters)} filters")
+            print(f"DEBUG: Processing {len(self.filter_expr.client_filters)} client-side filters")
+            
             for cf in self.filter_expr.client_filters:
-                print(f"  - {cf['field']} {cf['operator']} {cf['values']}")
+                print(f"DEBUG: Client filter - {cf['field']} {cf['operator']} {cf['values']}")
+                
+                # Special handling for certain fields and operators
+                needs_special_handling = False
+                
+                # Genre filters
+                if cf['field'] == 'genre':
+                    print(f"DEBUG: Found genre filter with operator {cf['operator']}")
+                    if cf['operator'] in ['contains_all', 'all', 'contains_none', 'contains_any']:
+                        needs_special_handling = True
+                        print(f"DEBUG: Using special handling for genre:{cf['operator']}")
+                
+                # Price filters
+                elif cf['field'] == 'price' and cf['operator'] in ['gt', 'lt', 'between']:
+                    needs_special_handling = True
+                
+                # Interested count filters
+                elif cf['field'] in ['interested', 'interestedCount'] and cf['operator'] in ['gt', 'lt', 'between']:
+                    needs_special_handling = True
+                
+                if needs_special_handling:
+                    special_filters.append(cf)
+                else:
+                    other_filters.append(cf)
         
-        all_events = []
-        all_bumps = []
-        page = 1
+        # First phase: Handle special filters that need custom approach
+        events_data = None
+        if special_filters:
+            # Initialize filter manager
+            filter_manager = AdvancedFilterManager(self)
+            
+            # Start with all events (or we'll use the first filter as a base)
+            if len(special_filters) > 1:
+                # For multiple special filters, we'll start with the first and then apply the rest
+                first_filter = special_filters[0]
+                field = first_filter['field']
+                operator = first_filter['operator']
+                values = first_filter['values']
+                
+                # Apply the first filter
+                if field == 'genre':
+                    # Use the specialized GenreQueryManager for genre filters
+                    genre_manager = GenreQueryManager(self)
+                    
+                    if operator == 'contains_all' or operator == 'all':
+                        print(f"Using GenreQueryManager for contains_all with genres: {values}")
+                        events_data = genre_manager.contains_all(values)
+                    
+                    elif operator == 'contains_none':
+                        print(f"Using GenreQueryManager for contains_none with genres: {values}")
+                        events_data = genre_manager.contains_none(values)
+                
+                elif field == 'price':
+                    if operator == 'gt':
+                        print(f"Using AdvancedFilterManager for price > {values[0]}")
+                        events_data = filter_manager.greater_than('price', values[0])
+                    
+                    elif operator == 'lt':
+                        print(f"Using AdvancedFilterManager for price < {values[0]}")
+                        events_data = filter_manager.less_than('price', values[0])
+                    
+                    elif operator == 'between' and len(values) >= 2:
+                        print(f"Using AdvancedFilterManager for price between {values[0]} and {values[1]}")
+                        events_data = filter_manager.between('price', values[0], values[1])
+                
+                elif field in ['interested', 'interestedCount']:
+                    if operator == 'gt':
+                        print(f"Using AdvancedFilterManager for interested > {values[0]}")
+                        events_data = filter_manager.greater_than('interested', values[0])
+                    
+                    elif operator == 'lt':
+                        print(f"Using AdvancedFilterManager for interested < {values[0]}")
+                        events_data = filter_manager.less_than('interested', values[0])
+                    
+                    elif operator == 'between' and len(values) >= 2:
+                        print(f"Using AdvancedFilterManager for interested between {values[0]} and {values[1]}")
+                        events_data = filter_manager.between('interested', values[0], values[1])
+                
+                # Apply remaining special filters
+                for sf in special_filters[1:]:
+                    if not events_data or not events_data["events"]:
+                        # If no events left, stop filtering
+                        break
+                    
+                    field = sf['field']
+                    operator = sf['operator']
+                    values = sf['values']
+                    
+                    # Filter the existing results
+                    all_events = events_data["events"]
+                    all_bumps = events_data["bumps"]
+                    
+                    # Apply the filter
+                    if field == 'genre':
+                        # Genre filters
+                        genre_manager = GenreQueryManager(self)
+                        
+                        if operator == 'contains_all' or operator == 'all':
+                            temp_result = genre_manager.contains_all(values)
+                            
+                            # Intersect with current results
+                            temp_event_ids = {event.get('event', {}).get('id') for event in temp_result["events"]}
+                            current_event_ids = {event.get('event', {}).get('id') for event in all_events}
+                            common_ids = current_event_ids.intersection(temp_event_ids)
+                            
+                            # Filter events to only those in the intersection
+                            all_events = [event for event in all_events if event.get('event', {}).get('id') in common_ids]
+                            
+                            # Do the same for bumps
+                            temp_bump_ids = {bump.get('event', {}).get('id') for bump in temp_result["bumps"]}
+                            current_bump_ids = {bump.get('event', {}).get('id') for bump in all_bumps}
+                            common_bump_ids = current_bump_ids.intersection(temp_bump_ids)
+                            all_bumps = [bump for bump in all_bumps if bump.get('event', {}).get('id') in common_bump_ids]
+                        
+                        elif operator == 'contains_none':
+                            temp_result = genre_manager.contains_any(values)
+                            
+                            # Remove events that match any of these genres
+                            temp_event_ids = {event.get('event', {}).get('id') for event in temp_result["events"]}
+                            all_events = [event for event in all_events if event.get('event', {}).get('id') not in temp_event_ids]
+                            
+                            # Do the same for bumps
+                            temp_bump_ids = {bump.get('event', {}).get('id') for bump in temp_result["bumps"]}
+                            all_bumps = [bump for bump in all_bumps if bump.get('event', {}).get('id') not in temp_bump_ids]
+                    
+                    elif field in ['price', 'interested', 'interestedCount']:
+                        # Numeric filters
+                        if operator == 'gt':
+                            # Filter events client-side
+                            threshold = float(values[0])
+                            
+                            # Extract field value based on field type
+                            if field == 'price':
+                                all_events = [
+                                    event for event in all_events 
+                                    if float(event.get('event', {}).get('price', '0') or 0) > threshold
+                                ]
+                                all_bumps = [
+                                    bump for bump in all_bumps 
+                                    if float(bump.get('event', {}).get('price', '0') or 0) > threshold
+                                ]
+                            else:  # interested/interestedCount
+                                all_events = [
+                                    event for event in all_events 
+                                    if event.get('event', {}).get('interestedCount', 0) > threshold
+                                ]
+                                all_bumps = [
+                                    bump for bump in all_bumps 
+                                    if bump.get('event', {}).get('interestedCount', 0) > threshold
+                                ]
+                        
+                        elif operator == 'lt':
+                            # Filter events client-side
+                            threshold = float(values[0])
+                            
+                            # Extract field value based on field type
+                            if field == 'price':
+                                all_events = [
+                                    event for event in all_events 
+                                    if float(event.get('event', {}).get('price', '0') or 0) < threshold
+                                ]
+                                all_bumps = [
+                                    bump for bump in all_bumps 
+                                    if float(bump.get('event', {}).get('price', '0') or 0) < threshold
+                                ]
+                            else:  # interested/interestedCount
+                                all_events = [
+                                    event for event in all_events 
+                                    if event.get('event', {}).get('interestedCount', 0) < threshold
+                                ]
+                                all_bumps = [
+                                    bump for bump in all_bumps 
+                                    if bump.get('event', {}).get('interestedCount', 0) < threshold
+                                ]
+                        
+                        elif operator == 'between' and len(values) >= 2:
+                            # Filter events client-side
+                            min_threshold = float(values[0])
+                            max_threshold = float(values[1])
+                            
+                            # Extract field value based on field type
+                            if field == 'price':
+                                all_events = [
+                                    event for event in all_events 
+                                    if min_threshold <= float(event.get('event', {}).get('price', '0') or 0) <= max_threshold
+                                ]
+                                all_bumps = [
+                                    bump for bump in all_bumps 
+                                    if min_threshold <= float(bump.get('event', {}).get('price', '0') or 0) <= max_threshold
+                                ]
+                            else:  # interested/interestedCount
+                                all_events = [
+                                    event for event in all_events 
+                                    if min_threshold <= event.get('event', {}).get('interestedCount', 0) <= max_threshold
+                                ]
+                                all_bumps = [
+                                    bump for bump in all_bumps 
+                                    if min_threshold <= bump.get('event', {}).get('interestedCount', 0) <= max_threshold
+                                ]
+                    
+                    # Update events_data for next iteration
+                    events_data = {
+                        "events": all_events,
+                        "bumps": all_bumps
+                    }
+            
+            else:
+                # Just one special filter
+                sf = special_filters[0]
+                field = sf['field']
+                operator = sf['operator']
+                values = sf['values']
+                
+                if field == 'genre':
+                    # Genre filters
+                    genre_manager = GenreQueryManager(self)
+                    
+                    if operator == 'contains_all' or operator == 'all':
+                        print(f"Using GenreQueryManager for contains_all with genres: {values}")
+                        events_data = genre_manager.contains_all(values)
+                    
+                    elif operator == 'contains_none':
+                        print(f"Using GenreQueryManager for contains_none with genres: {values}")
+                        events_data = genre_manager.contains_none(values)
+                
+                elif field == 'price':
+                    if operator == 'gt':
+                        print(f"Using AdvancedFilterManager for price > {values[0]}")
+                        events_data = filter_manager.greater_than('price', values[0])
+                    
+                    elif operator == 'lt':
+                        print(f"Using AdvancedFilterManager for price < {values[0]}")
+                        events_data = filter_manager.less_than('price', values[0])
+                    
+                    elif operator == 'between' and len(values) >= 2:
+                        print(f"Using AdvancedFilterManager for price between {values[0]} and {values[1]}")
+                        events_data = filter_manager.between('price', values[0], values[1])
+                
+                elif field in ['interested', 'interestedCount']:
+                    if operator == 'gt':
+                        print(f"Using AdvancedFilterManager for interested > {values[0]}")
+                        events_data = filter_manager.greater_than('interested', values[0])
+                    
+                    elif operator == 'lt':
+                        print(f"Using AdvancedFilterManager for interested < {values[0]}")
+                        events_data = filter_manager.less_than('interested', values[0])
+                    
+                    elif operator == 'between' and len(values) >= 2:
+                        print(f"Using AdvancedFilterManager for interested between {values[0]} and {values[1]}")
+                        events_data = filter_manager.between('interested', values[0], values[1])
         
-        while True:
-            print(f"Fetching page {page}...")
-            result = self.get_events(page)
+        # If no special handling needed, proceed with standard approach
+        if not events_data:
+            # Store the original client_filters
+            original_client_filters = self.filter_expr.client_filters if self.filter_expr else []
             
-            events = result.get("events", [])
-            bumps = result.get("bumps", [])
+            # If we've extracted filters, update the client_filters
+            if self.filter_expr and special_filters:
+                self.filter_expr.client_filters = other_filters
             
-            if not events and not bumps:
-                print("No more events found.")
-                break
+            # Standard event fetching logic
+            all_events = []
+            all_bumps = []
+            page = 1
             
-            all_events.extend(events)
-            all_bumps.extend(bumps)
+            while True:
+                print(f"Fetching page {page}...")
+                result = self.get_events(page)
+                
+                events = result.get("events", [])
+                bumps = result.get("bumps", [])
+                
+                if not events and not bumps:
+                    print("No more events found.")
+                    break
+                
+                all_events.extend(events)
+                all_bumps.extend(bumps)
+                
+                page += 1
+                time.sleep(DELAY)  # Rate limiting
+                
+                # Safety limit
+                if page > 50:
+                    print("Reached page limit (50). Stopping.")
+                    break
             
-            page += 1
-            time.sleep(DELAY)  # Rate limiting
+            # Apply client-side filters with enhanced operators
+            if self.filter_expr and other_filters:
+                print(f"Applying enhanced client-side filters to {len(all_events)} events...")
+                all_events = self.filter_expr.apply_client_filters(all_events)
+                all_bumps = self.filter_expr.apply_client_filters(all_bumps)
+                print(f"After enhanced filtering: {len(all_events)} events")
             
-            # Safety limit
-            if page > 50:
-                print("Reached page limit (50). Stopping.")
-                break
-        
-        # Apply client-side filters with enhanced operators
-        if self.filter_expr:
-            print(f"Applying enhanced client-side filters to {len(all_events)} events...")
-            all_events = self.filter_expr.apply_client_filters(all_events)
-            all_bumps = self.filter_expr.apply_client_filters(all_bumps)
-            print(f"After enhanced filtering: {len(all_events)} events")
+            # Restore original client_filters
+            if self.filter_expr:
+                self.filter_expr.client_filters = original_client_filters
+            
+            events_data = {
+                "events": all_events,
+                "bumps": all_bumps
+            }
         
         return {
-            "events": all_events,
-            "bumps": all_bumps,
-            "total_events": len(all_events),
-            "total_bumps": len(all_bumps),
+            "events": events_data["events"],
+            "bumps": events_data["bumps"],
+            "total_events": len(events_data["events"]),
+            "total_bumps": len(events_data["bumps"]),
             "filter_info": {
                 "graphql_filters_applied": self.filter_expr.get_graphql_filters() if self.filter_expr else {},
                 "client_filters_applied": len(self.filter_expr.client_filters) if self.filter_expr else 0,
+                "special_filters_applied": len(special_filters) if special_filters else 0,
                 "enhanced_operators_available": [
-                    "eq", "ne", "in", "nin", "has", "contains_all", "contains_any", "contains_none"
-                ]
+                    "eq", "in", "nin", "has", "contains_all", "contains_any", "contains_none",
+                    "all", "gt", "lt", "gte", "lte", "between", "starts", "ends"
+                ],
+                "filterable_fields": [
+                    "genre", "artists", "venue", "eventType", "area", "title", 
+                    "date", "time", "startTime", "endTime", "interested", "isTicketed", "price"
+                ],
+                "specialized_handling": ["genre", "price", "interested"] if special_filters else []
             }
         }
 
@@ -693,6 +1423,15 @@ def main():
     print(f"Date range: {args.start_date} to {args.end_date}")
     if args.filter:
         print(f"Advanced multi-value filter: {args.filter}")
+        print("Available operators: eq, in, nin, has, contains_all, contains_any, contains_none, all, gt, lt, gte, lte, between, starts, ends")
+        print("Filter examples:")
+        print("  artists:has:charlotte")
+        print("  venue:has:fabric")
+        print("  genre:contains_all:techno,industrial")
+        print("  genre:contains_any:techno,house,minimal")
+        print("  interested:gt:100")
+        print("  price:between:10,30")
+        print("  title:starts:opening")
     
     # Create advanced fetcher
     fetcher = EnhancedEventFetcher(
@@ -718,6 +1457,7 @@ def main():
         print(f"GraphQL filters applied: {filter_info['graphql_filters_applied']}")
         print(f"Client-side filters applied: {filter_info['client_filters_applied']}")
         print(f"Enhanced operators available: {', '.join(filter_info['enhanced_operators_available'])}")
+        print(f"Filterable fields: {', '.join(filter_info.get('filterable_fields', []))}")
 
 
 if __name__ == "__main__":

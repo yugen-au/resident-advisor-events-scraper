@@ -1,2 +1,58 @@
-venvs
-*.csv
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Debug files
+debug_*.json
+debug_*.txt
+debug_*.py
+debug_log.txt
+v3_debug_log.txt
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache files
+cache.json
+
+# Test files
+test_*.json
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

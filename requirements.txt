@@ -4,3 +4,4 @@ idna==3.4
 requests==2.28.2
 urllib3==1.26.15
 flask==2.3.3
+# SQLite is included in Python's standard library, no separate package needed

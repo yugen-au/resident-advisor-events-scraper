@@ -1,4 +1,4 @@
-# Enhanced Event Fetcher with Hybrid Filtering
+# Enhanced Event Fetcher V2 with Native GraphQL Multi-Genre Support
 import requests
 import json
 import time
@@ -17,151 +17,75 @@ HEADERS = {
 }
 DELAY = 1  # Rate limiting delay
 
-class FilterExpression:
-    """Parse and apply complex filter expressions"""
+class V2FilterExpression:
+    """Parse and apply V2 filter expressions with native GraphQL multi-genre support"""
     
     def __init__(self, expression: str = None):
         self.expression = expression
         self.graphql_filters = {}
-        self.client_filters = []
+        self.unsupported_filters = []
         
         if expression:
             self._parse_expression(expression)
     
     def _parse_expression(self, expression: str):
-        """Parse filter expression into GraphQL and client-side components"""
+        """Parse filter expression into GraphQL filters"""
         # Simple parser for expressions like:
-        # "genre:in:techno,house" 
-        # "area:eq:1 AND genre:ne:jazz"
-        # "area:eq:1 AND NOT genre:in:jazz,ambient"
+        # "genre:any:techno,house" 
+        # "genre:eq:techno"
+        # "eventType:eq:club"
         
-        # Split by logical operators
+        # Split by logical operators (for now, just handle simple cases)
         parts = re.split(r'\s+(AND|OR|NOT)\s+', expression)
-        
-        current_operator = 'AND'
         
         for i, part in enumerate(parts):
             part = part.strip()
             
             if part in ['AND', 'OR', 'NOT']:
-                current_operator = part
-                continue
+                continue  # Skip logical operators for now
                 
             if ':' in part:
                 field, operator, values = part.split(':', 2)
-                
-                # Check if we can handle this in GraphQL
-                if self._can_handle_in_graphql(field, operator, values):
-                    self._add_graphql_filter(field, operator, values)
-                else:
-                    self._add_client_filter(field, operator, values, current_operator)
-    
-    def _can_handle_in_graphql(self, field: str, operator: str, values: str) -> bool:
-        """Check if this filter can be handled by GraphQL"""
-        # Based on our testing, RA GraphQL supports:
-        # - eq, ne for single values
-        # - gte, lte for dates
-        # - NOT operator not supported natively
-        # - IN operator not supported natively
-        
-        if operator in ['eq', 'ne', 'gte', 'lte']:
-            return True
-        if operator == 'in':
-            return False  # Not supported by RA
-        return False
+                self._add_graphql_filter(field, operator, values)
     
     def _add_graphql_filter(self, field: str, operator: str, values: str):
         """Add filter that can be handled by GraphQL"""
-        if operator == 'eq':
-            self.graphql_filters[field] = {"eq": values}
-        elif operator == 'ne':
-            self.graphql_filters[field] = {"ne": values}
-        elif operator == 'gte':
-            if field not in self.graphql_filters:
-                self.graphql_filters[field] = {}
-            self.graphql_filters[field]["gte"] = values
-        elif operator == 'lte':
-            if field not in self.graphql_filters:
-                self.graphql_filters[field] = {}
-            self.graphql_filters[field]["lte"] = values
-    
-    def _add_client_filter(self, field: str, operator: str, values: str, logical_op: str):
-        """Add filter that needs client-side processing"""
-        self.client_filters.append({
-            'field': field,
-            'operator': operator, 
-            'values': values.split(',') if ',' in values else [values],
-            'logical_op': logical_op
-        })
+        
+        # Parse values
+        value_list = [v.strip() for v in values.split(',')]
+        
+        if field == "genre":
+            if operator == "eq":
+                self.graphql_filters["genre"] = {"eq": value_list[0]}
+            elif operator == "any":
+                self.graphql_filters["genre"] = {"any": value_list}
+            elif operator == "ne":
+                self.graphql_filters["genre"] = {"ne": value_list[0]}
+            else:
+                self.unsupported_filters.append(f"{field}:{operator}:{values}")
+        
+        elif field == "eventType":
+            if operator == "eq":
+                self.graphql_filters["eventType"] = {"eq": value_list[0]}
+            elif operator == "ne":
+                self.graphql_filters["eventType"] = {"ne": value_list[0]}
+            else:
+                self.unsupported_filters.append(f"{field}:{operator}:{values}")
+        
+        else:
+            self.unsupported_filters.append(f"{field}:{operator}:{values}")
     
     def get_graphql_filters(self) -> Dict[str, Any]:
         """Get filters that can be applied at GraphQL level"""
         return self.graphql_filters
     
-    def get_client_filters(self) -> List[Dict[str, Any]]:
-        """Get filters that need client-side processing"""
-        return self.client_filters
-    
-    def apply_client_filters(self, events: List[Dict]) -> List[Dict]:
-        """Apply client-side filters to event list"""
-        if not self.client_filters:
-            return events
-        
-        filtered_events = []
-        
-        for event in events:
-            if self._event_matches_client_filters(event):
-                filtered_events.append(event)
-        
-        return filtered_events
-    
-    def _event_matches_client_filters(self, event: Dict) -> bool:
-        """Check if event matches all client-side filters"""
-        for filter_def in self.client_filters:
-            field = filter_def['field']
-            operator = filter_def['operator']
-            values = filter_def['values']
-            logical_op = filter_def.get('logical_op', 'AND')
-            
-            # Get field value from event
-            event_value = self._get_event_field_value(event, field)
-            
-            # Apply filter
-            if operator == 'in':
-                matches = event_value in values
-            elif operator == 'nin' or (logical_op == 'NOT' and operator == 'in'):
-                matches = event_value not in values
-            elif operator == 'eq':
-                matches = event_value == values[0]
-            elif operator == 'ne':
-                matches = event_value != values[0]
-            else:
-                matches = True  # Unknown operator, don't filter
-            
-            # For now, use AND logic (all filters must match)
-            if not matches:
-                return False
-        
-        return True
-    
-    def _get_event_field_value(self, event: Dict, field: str) -> Any:
-        """Extract field value from event object"""
-        # Map filter field names to event object structure
-        if field == 'genre':
-            # Genre might be in event.pick.genre or similar
-            return event.get('event', {}).get('genre', '')
-        elif field == 'area':
-            # Area would be in the venue or location
-            return event.get('event', {}).get('venue', {}).get('area', '')
-        elif field == 'eventType':
-            return event.get('event', {}).get('eventType', '')
-        
-        # Default: try direct access
-        return event.get('event', {}).get(field, '')
+    def get_unsupported_filters(self) -> List[str]:
+        """Get filters that are not supported in V2"""
+        return self.unsupported_filters
 
 
-class EnhancedEventFetcher:
-    """Enhanced class with hybrid filtering support"""
+class EnhancedEventFetcherV2:
+    """V2 Event Fetcher with Native GraphQL Multi-Genre Support"""
 
     def __init__(self, areas, listing_date_gte, listing_date_lte=None, genre=None, 
                  event_type=None, sort_by="listingDate", include_bumps=True, 
@@ -174,14 +98,13 @@ class EnhancedEventFetcher:
         self.sort_by = sort_by
         self.include_bumps = include_bumps
         
-        # New: Advanced filtering
-        self.filter_expr = FilterExpression(filter_expression) if filter_expression else None
+        # V2: Native GraphQL filtering
+        self.filter_expr = V2FilterExpression(filter_expression) if filter_expression else None
         
         self.payload = self.generate_payload()
 
     def generate_payload(self):
-        """Generate GraphQL payload with hybrid filtering"""
-        operation_name = "GET_EVENT_LISTINGS_WITH_BUMPS" if self.include_bumps else "GET_EVENT_LISTINGS"
+        """Generate GraphQL payload with native multi-genre filtering"""
         
         # Start with base filters
         filters = {
@@ -192,21 +115,41 @@ class EnhancedEventFetcher:
         if self.listing_date_lte:
             filters["listingDate"]["lte"] = self.listing_date_lte
         
-        # Add legacy filters
+        # Handle legacy comma-separated genres (convert to native GraphQL)
         if self.genre:
-            filters["genre"] = {"eq": self.genre}
+            with open("debug_log.txt", "a") as f:
+                f.write(f"V2 DEBUG: Processing genre parameter: '{self.genre}'\n")
+                
+            if ',' in self.genre:
+                # Multi-genre: use native GraphQL 'any' operator
+                genres = [g.strip() for g in self.genre.split(',')]
+                filters["genre"] = {"any": genres}
+                with open("debug_log.txt", "a") as f:
+                    f.write(f"V2 DEBUG: Converting multi-genre '{self.genre}' to native GraphQL: {filters['genre']}\n")
+                    f.write(f"V2 DEBUG: Number of genres: {len(genres)}\n")
+            else:
+                # Single genre: use 'eq' operator
+                filters["genre"] = {"eq": self.genre}
+                with open("debug_log.txt", "a") as f:
+                    f.write(f"V2 DEBUG: Single genre filter: {filters['genre']}\n")
+        
+        # Add legacy event type filter
         if self.event_type:
             filters["eventType"] = {"eq": self.event_type}
         
-        # Add advanced GraphQL filters
+        # Add advanced GraphQL filters from filter expression
         if self.filter_expr:
             graphql_filters = self.filter_expr.get_graphql_filters()
-            # Merge carefully to avoid conflicts
             for field, filter_def in graphql_filters.items():
-                if field in filters and isinstance(filters[field], dict):
-                    filters[field].update(filter_def)
-                else:
-                    filters[field] = filter_def
+                filters[field] = filter_def
+                with open("debug_log.txt", "a") as f:
+                    f.write(f"V2 DEBUG: Added filter expression: {field} = {filter_def}\n")
+            
+            # Warn about unsupported filters
+            unsupported = self.filter_expr.get_unsupported_filters()
+            if unsupported:
+                with open("debug_log.txt", "a") as f:
+                    f.write(f"V2 DEBUG: Unsupported filters (use V3 for these): {unsupported}\n")
         
         # Configure sorting
         sort_config = self._get_sort_config()
@@ -216,38 +159,30 @@ class EnhancedEventFetcher:
             "eventType": True
         }
 
-        if self.include_bumps:
-            payload = {
-                "operationName": "GET_EVENT_LISTINGS_WITH_BUMPS",
-                "variables": {
-                    "filters": filters,
-                    "filterOptions": filter_options,
-                    "pageSize": 20,
-                    "page": 1,
-                    "sort": sort_config,
-                    "areaId": self.areas
-                },
-                "query": self._get_enhanced_query()
-            }
-        else:
-            payload = {
-                "operationName": "GET_EVENT_LISTINGS",
-                "variables": {
-                    "filters": filters,
-                    "filterOptions": filter_options,
-                    "pageSize": 20,
-                    "page": 1
-                },
-                "query": self._get_basic_query()
-            }
+        payload = {
+            "operationName": "GET_EVENT_LISTINGS_WITH_BUMPS" if self.include_bumps else "GET_EVENT_LISTINGS",
+            "variables": {
+                "filters": filters,
+                "filterOptions": filter_options,
+                "pageSize": 20,
+                "page": 1,
+                "sort": sort_config,
+                "areaId": self.areas
+            },
+            "query": self._get_query()
+        }
+        
+        # Debug output for comparison
+        with open("debug_log.txt", "a") as f:
+            f.write(f"V2 DEBUG: Final payload filters:\n")
+            import json
+            f.write(json.dumps(payload["variables"]["filters"], indent=2) + "\n")
 
         return payload
 
     def fetch_all_events(self):
-        """Fetch all events with hybrid filtering applied"""
-        print(f"Fetching events with hybrid filtering...")
-        if self.filter_expr and self.filter_expr.client_filters:
-            print(f"Client-side filters will be applied: {len(self.filter_expr.client_filters)} filters")
+        """Fetch all events with V2 native GraphQL filtering"""
+        print(f"V2: Fetching events with native GraphQL multi-genre support...")
         
         all_events = []
         all_bumps = []
@@ -275,21 +210,17 @@ class EnhancedEventFetcher:
                 print("Reached page limit (50). Stopping.")
                 break
         
-        # Apply client-side filters
-        if self.filter_expr:
-            print(f"Applying client-side filters to {len(all_events)} events...")
-            all_events = self.filter_expr.apply_client_filters(all_events)
-            all_bumps = self.filter_expr.apply_client_filters(all_bumps)
-            print(f"After client-side filtering: {len(all_events)} events")
-        
         return {
             "events": all_events,
             "bumps": all_bumps,
             "total_events": len(all_events),
             "total_bumps": len(all_bumps),
             "filter_info": {
-                "graphql_filters_applied": self.filter_expr.get_graphql_filters() if self.filter_expr else {},
-                "client_filters_applied": len(self.filter_expr.client_filters) if self.filter_expr else 0
+                "version": "v2",
+                "native_graphql_filters": self.filter_expr.get_graphql_filters() if self.filter_expr else {},
+                "unsupported_filters": self.filter_expr.get_unsupported_filters() if self.filter_expr else [],
+                "legacy_genre": self.genre,
+                "legacy_event_type": self.event_type
             }
         }
 
@@ -338,7 +269,7 @@ class EnhancedEventFetcher:
         events = event_data.get("eventListings", {}).get("data", [])
         bumps_raw = event_data.get("bumps", [])
         
-        # Process bumps to extract events (with safety checks)
+        # Process bumps to extract events
         bumps = []
         if isinstance(bumps_raw, list):
             for bump in bumps_raw:
@@ -356,7 +287,7 @@ class EnhancedEventFetcher:
         }
 
     def save_events_to_csv(self, events_data, output_file):
-        """Save events to CSV with enhanced data"""
+        """Save events to CSV"""
         events = events_data.get("events", [])
         
         with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
@@ -395,6 +326,13 @@ class EnhancedEventFetcher:
                 }
                 
                 writer.writerow(row)
+
+    def _get_query(self):
+        """Get the appropriate GraphQL query."""
+        if self.include_bumps:
+            return self._get_enhanced_query()
+        else:
+            return self._get_basic_query()
 
     def _get_enhanced_query(self):
         """Get the enhanced GraphQL query with bumps support."""
@@ -601,21 +539,21 @@ fragment eventListingsFields on Event {
 
 
 def main():
-    """Enhanced command line interface with filter expressions"""
-    parser = argparse.ArgumentParser(description="Fetch RA events with advanced filtering")
+    """V2 command line interface with native GraphQL multi-genre support"""
+    parser = argparse.ArgumentParser(description="V2: Fetch RA events with native GraphQL multi-genre filtering")
     parser.add_argument("area", type=int, help="Area ID")
     parser.add_argument("start_date", help="Start date (YYYY-MM-DD)")
     parser.add_argument("end_date", help="End date (YYYY-MM-DD)")
-    parser.add_argument("-o", "--output", default="events.csv", help="Output file")
+    parser.add_argument("-o", "--output", default="events_v2.csv", help="Output file")
     
-    # Legacy filters
-    parser.add_argument("-g", "--genre", help="Filter by genre")
+    # Legacy filters (now with native multi-genre support)
+    parser.add_argument("-g", "--genre", help="Single genre or comma-separated multiple genres")
     parser.add_argument("-t", "--event-type", help="Filter by event type")
     parser.add_argument("-s", "--sort", default="listingDate", choices=["listingDate", "score", "title"])
     parser.add_argument("--no-bumps", action="store_true", help="Exclude bumped events")
     
-    # New advanced filter
-    parser.add_argument("-f", "--filter", help="Advanced filter expression (e.g., 'genre:in:techno,house AND area:ne:2')")
+    # V2 native filter expressions
+    parser.add_argument("-f", "--filter", help="V2 filter expression (e.g., 'genre:any:techno,house')")
     
     args = parser.parse_args()
     
@@ -623,13 +561,15 @@ def main():
     listing_date_gte = f"{args.start_date}T00:00:00.000Z"
     listing_date_lte = f"{args.end_date}T23:59:59.999Z"
     
-    print(f"Enhanced Event Fetcher - Area: {args.area}")
+    print(f"V2 Enhanced Event Fetcher - Area: {args.area}")
     print(f"Date range: {args.start_date} to {args.end_date}")
+    if args.genre:
+        print(f"Genre filter: {args.genre}")
     if args.filter:
-        print(f"Advanced filter: {args.filter}")
+        print(f"V2 filter expression: {args.filter}")
     
-    # Create enhanced fetcher
-    fetcher = EnhancedEventFetcher(
+    # Create V2 fetcher
+    fetcher = EnhancedEventFetcherV2(
         areas=args.area,
         listing_date_gte=listing_date_gte,
         listing_date_lte=listing_date_lte,
@@ -647,10 +587,10 @@ def main():
     fetcher.save_events_to_csv(events_data, args.output)
     
     print(f"Saved {events_data['total_events']} events to {args.output}")
-    if events_data.get('filter_info'):
-        filter_info = events_data['filter_info']
-        print(f"GraphQL filters applied: {filter_info['graphql_filters_applied']}")
-        print(f"Client-side filters applied: {filter_info['client_filters_applied']}")
+    filter_info = events_data.get('filter_info', {})
+    print(f"V2 native GraphQL filters: {filter_info.get('native_graphql_filters', {})}")
+    if filter_info.get('unsupported_filters'):
+        print(f"Unsupported filters (use V3): {filter_info['unsupported_filters']}")
 
 
 if __name__ == "__main__":
